@@ -5,7 +5,12 @@ pub mod errors;
 pub mod instructions;
 pub mod state;
 
-use instructions::*;
+use instructions::initialize::*;
+use instructions::create_token::*;
+use instructions::buy::*;
+use instructions::sell::*;
+use instructions::graduate::*;
+use instructions::update_config::*;
 
 declare_id!("11111111111111111111111111111111");
 
@@ -13,7 +18,6 @@ declare_id!("11111111111111111111111111111111");
 pub mod rise_launchpad {
     use super::*;
 
-    /// Initialize the platform config — called once by RISE admin
     pub fn initialize(
         ctx: Context<Initialize>,
         params: InitializeParams,
@@ -21,7 +25,6 @@ pub mod rise_launchpad {
         instructions::initialize::handler(ctx, params)
     }
 
-    /// Deploy a new token — pays deploy fee, creates bonding curve pool
     pub fn create_token(
         ctx: Context<CreateToken>,
         params: CreateTokenParams,
@@ -29,7 +32,6 @@ pub mod rise_launchpad {
         instructions::create_token::handler(ctx, params)
     }
 
-    /// Buy tokens from the bonding curve
     pub fn buy(
         ctx: Context<Buy>,
         sol_amount: u64,
@@ -38,7 +40,6 @@ pub mod rise_launchpad {
         instructions::buy::handler(ctx, sol_amount, min_tokens_out)
     }
 
-    /// Sell tokens back to the bonding curve
     pub fn sell(
         ctx: Context<Sell>,
         token_amount: u64,
@@ -47,12 +48,12 @@ pub mod rise_launchpad {
         instructions::sell::handler(ctx, token_amount, min_sol_out)
     }
 
-    /// Graduate token to Raydium once target SOL is raised
-    pub fn graduate(ctx: Context<Graduate>) -> Result<()> {
+    pub fn graduate(
+        ctx: Context<Graduate>,
+    ) -> Result<()> {
         instructions::graduate::handler(ctx)
     }
 
-    /// Admin: update platform config
     pub fn update_config(
         ctx: Context<UpdateConfig>,
         params: UpdateConfigParams,
