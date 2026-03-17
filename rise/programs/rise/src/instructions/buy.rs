@@ -1,10 +1,293 @@
 use anchor_lang::prelude::*;
+use anchor_lang::system_program;
+use anchor_spl::token::{self, Token, TokenAccount};
+use crate::state::{PlatformConfig, TokenPool, WalletBuyRecord};
+use crate::errors::RiseError;
+use crate::bonding_curve::BondingCurve;
+
+// 60 seconds in Unix time
+const LAUNCH_COOLDOWN_SECS: i64 = 60;
+// 1% in basis points
+const LAUNCH_MAX_BPS: u64 = 100;
 
 #[derive(Accounts)]
 pub struct Buy<'info> {
+    #[account(
+        seeds = [b"platform_config"],
+        bump = platform_config.bump,
+    )]
+    pub platform_config: Account<'info, PlatformConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"token_pool", token_pool.mint.as_ref()],
+        bump = token_pool.bump,
+    )]
+    pub token_pool: Account<'info, TokenPool>,
+
+    // Pool's token account — tokens come from here
+    #[account(
+        mut,
+        token::mint = token_pool.mint,
+        token::authority = token_pool,
+    )]
+    pub pool_token_account: Account<'info, TokenAccount>,
+
+    // Buyer's token account — tokens go here
+    #[account(
+        mut,
+        token::mint = token_pool.mint,
+        token::authority = buyer,
+    )]
+    pub buyer_token_account: Account<'info, TokenAccount>,
+
+    // Per-wallet record for anti-bundling + hold cap tracking
+    #[account(
+        init_if_needed,
+        payer = buyer,
+        space = WalletBuyRecord::LEN,
+        seeds = [
+            b"wallet_buy_record",
+            token_pool.key().as_ref(),
+            buyer.key().as_ref()
+        ],
+        bump
+    )]
+    pub wallet_buy_record: Account<'info, WalletBuyRecord>,
+
+    // Treasury receives platform fee
+    /// CHECK: validated against platform_config.treasury
+    #[account(
+        mut,
+        constraint = treasury.key() == platform_config.treasury
+    )]
+    pub treasury: AccountInfo<'info>,
+
+    // Creator receives creator fee
+    /// CHECK: validated against token_pool.creator
+    #[account(
+        mut,
+        constraint = creator.key() == token_pool.creator
+    )]
+    pub creator: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub buyer: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(_ctx: Context<Buy>, _sol_amount: u64, _min_tokens_out: u64) -> Result<()> {
+pub fn handler(
+    ctx: Context<Buy>,
+    sol_amount: u64,
+    min_tokens_out: u64,
+) -> Result<()> {
+    let config   = &ctx.accounts.platform_config;
+    let pool     = &mut ctx.accounts.token_pool;
+    let record   = &mut ctx.accounts.wallet_buy_record;
+    let clock    = Clock::get()?;
+
+    // ── SAFETY CHECKS ────────────────────────────────────────────
+
+    // 1. Pool must not be paused
+    require!(!pool.paused, RiseError::PoolPaused);
+
+    // 2. Token must not have graduated
+    require!(!pool.graduated, RiseError::AlreadyGraduated);
+
+    // 3. Amount must be greater than zero
+    require!(sol_amount > 0, RiseError::ZeroAmount);
+
+    // 4. Anti-bundling: per-block buy limit
+    if record.last_buy_slot == clock.slot {
+        require!(
+            record.buys_this_slot < WalletBuyRecord::MAX_BUYS_PER_SLOT,
+            RiseError::CooldownActive
+        );
+    }
+
+    // 5. Launch cooldown: first 60 seconds max 1% per transaction
+    let seconds_since_launch = clock.unix_timestamp - pool.created_at;
+    if seconds_since_launch < LAUNCH_COOLDOWN_SECS {
+        let max_during_cooldown = pool.total_supply
+            .checked_mul(LAUNCH_MAX_BPS)
+            .ok_or(RiseError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(RiseError::MathOverflow)?;
+
+        // Calculate how many tokens this SOL would buy
+        let tokens_preview = BondingCurve::get_tokens_out(
+            sol_amount,
+            pool.virtual_sol_reserves,
+            pool.virtual_token_reserves,
+        )?;
+
+        require!(
+            tokens_preview <= max_during_cooldown,
+            RiseError::LaunchCooldownActive
+        );
+    }
+
+    // ── CALCULATE TOKENS OUT ─────────────────────────────────────
+
+    let tokens_out = BondingCurve::get_tokens_out(
+        sol_amount,
+        pool.virtual_sol_reserves,
+        pool.virtual_token_reserves,
+    )?;
+
+    // 6. Slippage check
+    require!(tokens_out >= min_tokens_out, RiseError::SlippageExceeded);
+
+    // 7. Check unlocked supply — cannot buy more than what's unlocked
+    let available = pool.unlocked_supply
+        .checked_sub(pool.tokens_sold)
+        .ok_or(RiseError::MathUnderflow)?;
+    require!(tokens_out <= available, RiseError::ExceedsUnlockedSupply);
+
+    // 8. Wallet hold cap — max 5%
+    let max_hold = (pool.total_supply as u128)
+        .checked_mul(config.max_wallet_bps as u128)
+        .ok_or(RiseError::MathOverflow)?
+        .checked_div(10_000)
+        .ok_or(RiseError::MathOverflow)? as u64;
+
+    require!(
+        record.tokens_held.checked_add(tokens_out)
+            .ok_or(RiseError::MathOverflow)? <= max_hold,
+        RiseError::ExceedsMaxWalletHold
+    );
+
+    // ── FEES ─────────────────────────────────────────────────────
+
+    let total_fee_bps = config.platform_fee_bps + config.creator_fee_bps;
+    let (sol_after_fee, total_fee) = BondingCurve::apply_fee(sol_amount, total_fee_bps)?;
+
+    // Split fee: platform gets platform_fee_bps, creator gets creator_fee_bps
+    let platform_fee = (total_fee as u128)
+        .checked_mul(config.platform_fee_bps as u128)
+        .ok_or(RiseError::MathOverflow)?
+        .checked_div(total_fee_bps as u128)
+        .ok_or(RiseError::MathOverflow)? as u64;
+
+    let creator_fee = total_fee
+        .checked_sub(platform_fee)
+        .ok_or(RiseError::MathUnderflow)?;
+
+    // Transfer SOL from buyer to pool
+    system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.buyer.to_account_info(),
+                to:   ctx.accounts.pool_token_account.to_account_info(),
+            },
+        ),
+        sol_after_fee,
+    )?;
+
+    // Transfer platform fee to treasury
+    if platform_fee > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.buyer.to_account_info(),
+                    to:   ctx.accounts.treasury.to_account_info(),
+                },
+            ),
+            platform_fee,
+        )?;
+    }
+
+    // Transfer creator fee to creator
+    if creator_fee > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.buyer.to_account_info(),
+                    to:   ctx.accounts.creator.to_account_info(),
+                },
+            ),
+            creator_fee,
+        )?;
+    }
+
+    // ── TRANSFER TOKENS TO BUYER ─────────────────────────────────
+
+    let mint_key = pool.mint;
+    let seeds = &[
+        b"token_pool",
+        mint_key.as_ref(),
+        &[pool.bump],
+    ];
+    let signer_seeds = &[&seeds[..]];
+
+    token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            token::Transfer {
+                from:      ctx.accounts.pool_token_account.to_account_info(),
+                to:        ctx.accounts.buyer_token_account.to_account_info(),
+                authority: pool.to_account_info(),
+            },
+            signer_seeds,
+        ),
+        tokens_out,
+    )?;
+
+    // ── UPDATE STATE ─────────────────────────────────────────────
+
+    // Update pool reserves
+    pool.virtual_sol_reserves = pool.virtual_sol_reserves
+        .checked_add(sol_after_fee)
+        .ok_or(RiseError::MathOverflow)?;
+    pool.virtual_token_reserves = pool.virtual_token_reserves
+        .checked_sub(tokens_out)
+        .ok_or(RiseError::MathUnderflow)?;
+    pool.real_sol_reserves = pool.real_sol_reserves
+        .checked_add(sol_after_fee)
+        .ok_or(RiseError::MathOverflow)?;
+    pool.real_token_reserves = pool.real_token_reserves
+        .checked_sub(tokens_out)
+        .ok_or(RiseError::MathUnderflow)?;
+    pool.tokens_sold = pool.tokens_sold
+        .checked_add(tokens_out)
+        .ok_or(RiseError::MathOverflow)?;
+    pool.sol_raised = pool.sol_raised
+        .checked_add(sol_after_fee)
+        .ok_or(RiseError::MathOverflow)?;
+
+    // Update progressive supply unlock
+    let new_unlocked_bps = TokenPool::get_unlocked_bps(pool.sol_raised);
+    pool.unlocked_supply = (pool.total_supply as u128)
+        .checked_mul(new_unlocked_bps as u128)
+        .ok_or(RiseError::MathOverflow)?
+        .checked_div(10_000)
+        .ok_or(RiseError::MathOverflow)? as u64;
+
+    // Update wallet buy record
+    record.wallet      = ctx.accounts.buyer.key();
+    record.token_pool  = pool.key();
+    record.tokens_held = record.tokens_held
+        .checked_add(tokens_out)
+        .ok_or(RiseError::MathOverflow)?;
+
+    // Anti-bundling slot tracking
+    if record.last_buy_slot == clock.slot {
+        record.buys_this_slot += 1;
+    } else {
+        record.last_buy_slot  = clock.slot;
+        record.buys_this_slot = 1;
+    }
+
+    msg!("RISE buy executed");
+    msg!("SOL in: {}", sol_amount);
+    msg!("Tokens out: {}", tokens_out);
+    msg!("SOL raised total: {}", pool.sol_raised);
+    msg!("Unlocked supply: {}", pool.unlocked_supply);
+
     Ok(())
 }
