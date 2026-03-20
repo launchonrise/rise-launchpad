@@ -30,7 +30,7 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
+pub fn handler_impl(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
     // Validate fees — total cannot exceed 10%
     require!(
         params.platform_fee_bps + params.creator_fee_bps <= 1000,

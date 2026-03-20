@@ -71,7 +71,7 @@ pub struct Sell<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(
+pub fn handler_impl(
     ctx: Context<Sell>,
     token_amount: u64,
     min_sol_out: u64,

@@ -26,7 +26,7 @@ pub struct UpdateConfig<'info> {
     pub admin: Signer<'info>,
 }
 
-pub fn handler(ctx: Context<UpdateConfig>, params: UpdateConfigParams) -> Result<()> {
+pub fn handler_impl(ctx: Context<UpdateConfig>, params: UpdateConfigParams) -> Result<()> {
     let config = &mut ctx.accounts.platform_config;
 
     if let Some(deploy_fee) = params.deploy_fee {

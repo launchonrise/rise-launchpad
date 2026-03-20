@@ -1,18 +1,19 @@
+#![allow(ambiguous_glob_reexports)]
 use anchor_lang::prelude::*;
 
 pub mod bonding_curve;
 pub mod errors;
-pub mod instructions;
 pub mod state;
+pub mod instructions;
 
-use instructions::initialize::*;
-use instructions::create_token::*;
-use instructions::buy::*;
-use instructions::sell::*;
-use instructions::graduate::*;
-use instructions::update_config::*;
+pub use instructions::initialize::*;
+pub use instructions::create_token::*;
+pub use instructions::buy::*;
+pub use instructions::sell::*;
+pub use instructions::graduate::*;
+pub use instructions::update_config::*;
 
-declare_id!("11111111111111111111111111111111");
+declare_id!("J2rhm79GS6JhCNCpmuxBHrVMSNU8fC8XLKQcMeAwqxyU");
 
 #[program]
 pub mod rise_launchpad {
@@ -22,14 +23,14 @@ pub mod rise_launchpad {
         ctx: Context<Initialize>,
         params: InitializeParams,
     ) -> Result<()> {
-        instructions::initialize::handler(ctx, params)
+        instructions::initialize::handler_impl(ctx, params)
     }
 
     pub fn create_token(
         ctx: Context<CreateToken>,
         params: CreateTokenParams,
     ) -> Result<()> {
-        instructions::create_token::handler(ctx, params)
+        instructions::create_token::handler_impl(ctx, params)
     }
 
     pub fn buy(
@@ -37,7 +38,7 @@ pub mod rise_launchpad {
         sol_amount: u64,
         min_tokens_out: u64,
     ) -> Result<()> {
-        instructions::buy::handler(ctx, sol_amount, min_tokens_out)
+        instructions::buy::handler_impl(ctx, sol_amount, min_tokens_out)
     }
 
     pub fn sell(
@@ -45,19 +46,19 @@ pub mod rise_launchpad {
         token_amount: u64,
         min_sol_out: u64,
     ) -> Result<()> {
-        instructions::sell::handler(ctx, token_amount, min_sol_out)
+        instructions::sell::handler_impl(ctx, token_amount, min_sol_out)
     }
 
     pub fn graduate(
         ctx: Context<Graduate>,
     ) -> Result<()> {
-        instructions::graduate::handler(ctx)
+        instructions::graduate::handler_impl(ctx)
     }
 
     pub fn update_config(
         ctx: Context<UpdateConfig>,
         params: UpdateConfigParams,
     ) -> Result<()> {
-        instructions::update_config::handler(ctx, params)
+        instructions::update_config::handler_impl(ctx, params)
     }
 }

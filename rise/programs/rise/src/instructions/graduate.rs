@@ -43,7 +43,7 @@ pub struct Graduate<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<Graduate>) -> Result<()> {
+pub fn handler_impl(ctx: Context<Graduate>) -> Result<()> {
     let config = &ctx.accounts.platform_config;
     let pool   = &mut ctx.accounts.token_pool;
 

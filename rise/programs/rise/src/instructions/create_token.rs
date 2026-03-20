@@ -67,7 +67,7 @@ pub struct CreateToken<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
-pub fn handler(ctx: Context<CreateToken>, _params: CreateTokenParams) -> Result<()> {
+pub fn handler_impl(ctx: Context<CreateToken>, _params: CreateTokenParams) -> Result<()> {
     let config = &ctx.accounts.platform_config;
 
     // Check creation is not paused
