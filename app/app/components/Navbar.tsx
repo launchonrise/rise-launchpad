@@ -4,17 +4,12 @@ import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 export default function Navbar() {
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-sm">
-      <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+    <nav className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-[#0c0c0c]">
+      <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-3">
-          <div className="flex flex-col gap-0.5">
-            <span className="block w-5 h-0.5 bg-white opacity-40"></span>
-            <span className="block w-5 h-0.5 bg-white opacity-70"></span>
-            <span className="block w-5 h-0.5 bg-white opacity-100"></span>
-          </div>
           <span className="font-mono font-semibold text-white tracking-widest text-sm">RISE</span>
         </Link>
-        <div className="hidden md:flex items-center gap-6">
+        <div className="flex items-center gap-8">
           <Link href="/" className="font-mono text-xs tracking-widest text-white/50 hover:text-white transition-colors">TOKENS</Link>
           <Link href="/create" className="font-mono text-xs tracking-widest text-white/50 hover:text-white transition-colors">LAUNCH</Link>
           <Link href="/portfolio" className="font-mono text-xs tracking-widest text-white/50 hover:text-white transition-colors">PORTFOLIO</Link>
